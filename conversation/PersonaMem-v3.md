@@ -2,26 +2,31 @@
 title: PersonaMem-v3
 date: 2026-08-27
 ---
+
 # 问题是什么？
 
 用户画像=平台✖️时间
 
 用户同一天内穿梭于不同的平台：feeds, messaging, chatbots, and companion characters
+
 模型必须在共享的上下文中进行推理，从A平台学到的信息用于更新B平台推荐的个性化信息流
 
 有效的个性化：
 
 不应该做什么？——过度个性化
+
 在模型越来越会利用上下文、外部记忆库的同时，也要注意防止过度个性化。
+
 过度个性化包括：fatigue, inappropriateness, irrelevance, and sycophancy
 
 应该做什么？——主动式个性化
+
 考虑时间的维度，区分持久的偏好和短暂的偏好
 
 # 评测目标是什么？
 
-1.能否检索多平台的用户历史交互记录
-2.能够连贯、恰当的使用历史交互记录，防止过度个性化
+1. 能否检索多平台的用户历史交互记录
+2. 能够连贯、恰当的使用历史交互记录，防止过度个性化
 
 # 原始数据集特点
 
@@ -37,7 +42,7 @@ schema:
 | `interaction_type` | `string` | One of: `explicit_positive`, `implicit_positive`, `implicit_negative`, `explicit_negative` |
 | `interaction_time` | `string` | Anonymized interaction timestamp |
 
-interaction_type: 
+interaction_type:
 
 | Type                | Meaning                                   | Examples                       |
 | ------------------- | ----------------------------------------- | ------------------------------ |
@@ -46,8 +51,8 @@ interaction_type:
 | `implicit_negative` | Passive negative signal                   | Scrolled past, skipped         |
 | `explicit_negative` | User actively expressed dislike           | Downvoted, reported, rated low |
 
-
 example：
+
 ```json
 {
 "interaction_type":"implicit_positive",
@@ -68,34 +73,42 @@ example：
 }
 ```
 
-
 特点
-1.真实数据
-2.每一条数据是一次互动，一个用户的一次行为
-3.数据分布不均衡，63.8%是implicit negative
-4.并不包含用户画像、行为偏好
-5.并不区分平台
+1. 真实数据
+2. 每一条数据是一次互动，一个用户的一次行为
+3. 数据分布不均衡，63.8%是implicit negative
+4. 并不包含用户画像、行为偏好
+5. 并不区分平台
 
 从中采样
+
 用户数量：200
-交互记录：over  1,000,000 
+
+交互记录：over  1,000,000
+
 约束： averaging more than 4,000 events per user over a 30-day observation window
+
 # 如何基于真实数据合成更丰富的数据？
 
 基于以上互动记录，生成更加丰富的数据：人物画像、偏好、语气以及带时间戳的交互记录
 
 PersonaMem-v3采用三段式的采集策略
+
 ## 1 交互记录->原子偏好
 
 ### 1.1 静态偏好提取：
 三类: explicit positives, explicit negatives, and implicit positives
+
 对每条交互记录，从不同角度预测至少3个原子偏好，并给出初始置信度分数。
+
 另一类: implicit negative
+
 单次滑过不代表明显的信号，因此从重复多次的滑过中进行推断
 
 ### **01_infer_atomic_personas**
 
 对于前三类
+
 输入一条交互记录
 
 ```json
@@ -161,7 +174,9 @@ implicit_positive,
 ### **02_promote_implicit_negatives**
 
 输入所有类别为implicit_negatives的交互数据（即用户快速划过、略过的数据）
+
 在本次示例中该用户只有2条数据，如下：
+
 ```json
 {
 "__class__": "data_preparation.persona_agent.InteractionRow",
@@ -190,68 +205,105 @@ implicit_positive,
 ```
 
 提取这些数据的hashtag
+
 从前三类交互中统计每个 hashtag 的负向信号，同时扣除正向信号：
+
       - implicit_negative：负向权重 +1
+
       - explicit_positive：正向反证权重 -2
+
       - implicit_positive：正向反证权重 -1
-
-
 
 ### **03_cross-reference_&\_filter**
 
 **合并：**
+
 第 1 步一共生成：1269 个 AtomicPersona。每个 AtomicPersona 通常来自一条原始互动。第 3 步首先按照标准化后的 persona_item 文本进行分组。
+
 标准化主要包括：
+
   - 转为小写
+
   - 去除首尾空格
+
   - 合并连续空格
+
 例如：
+
   Enjoys funny videos
+
   enjoys   funny videos
+
   ENJOYS FUNNY VIDEOS
+
 会被视为同一个文本偏好。
 
 因此1269 个 AtomicPersona→ 1261 个初步 canonical 文本组，置信度保留最高的
 
 **初始置信度过滤：**
+
 当前代码对正向偏好的第 3 步初始过滤门槛是：
+
 MIN_PERSONA_INIT_CONFIDENCE = 0.65
+
 规则是：
+
 最高初始置信度 < 0.65 → 丢弃
+
 最高初始置信度 >= 0.65 → 继续验证
+
 含义是：
+
 模型只是有一点猜测 → 删除
+
 模型至少比较明确地推断出该偏好 → 继续交叉引用
 
 需要区分两个容易混淆的值：
+
 MIN_PERSONA_INIT_CONFIDENCE = 0.65
+
 HIGH_CONFIDENCE_INIT_THRESHOLD = 0.75
 
 当前代码的实际含义是：
+
   0.65：
+
   正向 canonical 进入第 3 步后续处理的最低初始置信度
+
   0.75：
+
   用于 is_high_confidence() 的更严格 high-confidence 判断
+
 因此，如果论文写“正向偏好必须达到 0.75 才能进入 cross-reference”，与当前代码并不完全一致。更准确的说法是：
+
   > 正向偏好进入交叉引用流程的当前初始置信度门槛为 0.65；0.75 用于更严格的高置信度判定。
 
 负向偏好使用独立的初始门槛：
+
 MIN_NEGATIVE_INIT_CONFIDENCE = 0.55
 
-
 **统计证据并计算交叉引用分数：**
+
 对每一个通过初始置信度过滤的 canonical，统计它背后的原始证据。
+
 当前正向偏好的基础计算公式是：
+
 	confidence_cross_referenced=1.0+显式独立证据数 × 1.0+隐式独立证据数 × 0.5
+
 还有以下限制：
+
   - 同一个 source_object_id 只计算一次
+
   - 原子偏好的 confidence_score_init 必须达到 0.65
+
   - 只统计用户最近 7 天内的证据
+
   - 没有有效 source_object_id 的证据不计入
+
   - 超出最近 7 天窗口的历史证据不计入当前交叉引用分数
 
-
 以下面两条原子偏好为例，交叉引用记分得到1+0.5+0.5=2
+
 ```json
 "actively consumes aspirational couple and relationship goal content on social media": [
 {
@@ -294,38 +346,62 @@ MIN_NEGATIVE_INIT_CONFIDENCE = 0.55
 ],
 ```
 
-
 **判断偏好之间的关系**：
+
 第 3 步会将候选 canonical 按 category 分组，例如：
+
   parenting
+
   romantic relationship inspiration
+
   dance
+
 然后由 LLM 判断具体偏好之间的关系：similar/contradictory/none
 
 similar的处理方式：
+
 如果两个 canonical 被判断为 similar，系统还会检查它们的证据是否一致：
+
   - 是否共享具体 hashtag
+
   - 是否共享主题词
+
   - 是否存在文本包含关系
+
   例如：
+
   A 的 hashtag： #couplegoals #relationshipgoals
+
   B 的 hashtag： #couplegoals #relationshipgoals
+
   因为共享具体主题证据，所以允许合并。
+
   合并时：
+
   - 选择初始置信度最高的 canonical 作为代表
+
   - 成员的 confidence_cross_referenced 相加
+
   - 所有成员背后的 AtomicPersona 证据合并到代表的 _canonical_groups
+
   - 在 _merge_map 中记录旧偏好到代表偏好的映射
 
   例如：
+
   成员 A：
+
   score = 2.0
+
   成员 B：
+
   score = 2.0
+
   合并后的代表：
+
   score = 2.0 + 2.0 = 4.0
 
 contradictory 的处理方式：
+
 如果两个 canonical 被判断为 contradictory，不会进行合并，而是计算惩罚
 
 example:
@@ -367,37 +443,47 @@ example:
 },
 ```
 在这个例子中，三条原子偏好和“"Likely a mother of a daughter"是矛盾的，因此
+
 score= 1.0 + 0 + 0 = 1.0
+
 penalty += 0.5 * other_base，本例子中有多个矛盾，因此要计算多个惩罚
+
 confidence_cross_referenced=max(0.0, score - penalty)=0
 
 **为什么这个例子中n_explicit_rows，n_implicit_rows都是0？因为该原子偏好的时间超过了7天的窗口**
+
 “4 月 5 日开始”来自该用户最后一条互动时间 2026-04-12 05:34:45 往前推 7 天，而不是来自这条母亲/女儿偏好的内容本身。由于该偏好发生在2026-04-04 14:24:54，早于窗口起点约 15 小时，因此没有被算作近期交叉引用证据。
 
-
-
 **证据阈值**
+
   交叉引用分数计算后，还要与偏好类型对应的阈值比较。
 
   短期候选使用：XREF_THRESHOLD_SHORT_TERM = 3.0
 
   长期偏好的阈值由证据混合比例决定：
+
   XREF_THRESHOLD_EXPLICIT = 20.0
+
   XREF_THRESHOLD_IMPLICIT = 50.0
+
   当前实现不是简单二选一，而是按显式/隐式证据比例插值：
+
   全部显式证据 → 阈值 20
+
   全部隐式证据 → 阈值 50
+
   显式、隐式混合 → 阈值位于 20 和 50 之间
 
- 
-  
 在该用户的例子中，最后得到
+
 17 个正向 CrossReferencedPersona 候选
+
 0 个负向 CrossReferencedPersona 候选
 
 其中：17 个正向候选有8 个普通候选偏好和9 个 contradictory 偏好
 
 负向候选为 0 的原因是：implicit_negative 只有 2 条
+
 ### 1.2 动态偏好演化：
 短期意图和持久偏好的区分，代理不仅要记住用户的偏好，还要知道该偏好在何时有效。
 
@@ -406,30 +492,51 @@ confidence_cross_referenced=max(0.0, score - penalty)=0
 ### **04_classify_horizons_+_stops**
 
 分组输入数据：
+
 17 个正向 CrossReferencedPersona 候选
+
 0 个负向 CrossReferencedPersona 候选
+
 判断长期还是短期
 
 判断的依据：
+
 首先，对每个canonical preference计算：
+
 span_days：该偏好的最早证据时间到最晚证据时间的跨度
+
 n_total_rows= n_explicit_rows + n_implicit_rows
+
 obs_window_days=用户所有互动的总体时间窗口
+
 span_frac = span_days / obs_window_days
+
 同时满足
+
 span_days / obs_window_days <= 0.35 且 n_total_rows < 8
+
 就标记为：candidate（是否是short_term以及时间有效性还需要mini llm进一步判断）
+
 否则直接标记为：long_term
 
 接着，由mini llm进行判断：
+
 输入：
+
 persona_item
+
 category
+
 span_days
+
 n_rows
+
 first_formatted_ts
+
 last_formatted_ts
+
 user_profile
+
 obs_window_days
 
 输出：short_term还是long_term
@@ -437,7 +544,9 @@ obs_window_days
 ### **05_temporal_contradiction_graph**
 
 对于前面判断出来的矛盾偏好，进行进一步整理
+
 筛选出矛盾偏好，按主题分组、按时间排序、LLM 解释可能的偏好变化，程序解析并保存为 temporal_graph
+
 在本例中，9 条矛盾偏好一次性输入 mini LLM，最终被组织成 1 个主题、9 个时间节点
 
 ```json
@@ -502,11 +611,17 @@ obs_window_days
 
 ### 06_build_update_histories
 update_type有两种维度
+
 一种是基于程序规则：
+
  - reinforced：同一偏好被不同 source_object_id 重复支持
+
  - contradicted：与另一个偏好存在已识别的矛盾关系
+
  - faded：该偏好最后出现后，超过48小时没有再次出现
+
 另一种是基于大模型判断：
+
  - deepened：兴趣从一般变得更具体或更深入
 - branched：原有兴趣扩展出新的子方向
 - shifted：关注重点从一个方向转移到另一个方向
@@ -552,63 +667,102 @@ update_type有两种维度
 
 ### 07_resolve_cross-polarity_contradictions
 前面的步骤中解决了同极性下不同证据来源产生的冲突，该步骤解决不同极性下的冲突。
+
 通过 hashtag 重叠、LLM 语义判断、证据强弱和时间先例决定保留、删除或同时保留两种立场；但对用户 251 来说，由于没有任何负向候选，这一步实际没有产生变化。
 
 ## 2.离散的偏好->连贯的用户画像
 A list of preferences
+
 转化为
+
 a basic profile, a writing voice, app-specific self-presentations, hidden motivations sit beneath the surface engagement, and sensitive life context
+
 ## basic profile
 
 为该用户采样人口属性：
+
   ## 1. 性别和性取向
+
   代码从预设分布中采样。当前结果是cisgender female, lesbian
 
   ## 2. 种族/族裔
+
   同样从预设分布采样。当前结果是White American
 
   ## 3. 教育程度
+
   基于 user_id 的确定性加权抽样
+
   也就是说，当前实现主要是程序根据用户 ID 和教育程度分布进行可复现抽样。
+
   用户 251 得到：Bachelor's degree in Chemistry
+
   代码还对专业学位做额外限制：
+
 	如果抽到 JD / MD / DDS 等专业学位，但偏好中没有法律、医学、牙科、药学等相关信号，则重新抽样。
 
   ## 4. Big Five
+
 Big Five 是五因素人格模型，用五个维度描述人格倾向：
+
   O — Openness：开放性，接受新事物和新观点的程度；
+
   C — Conscientiousness：尽责性，计划、自律和组织程度；
+
   E — Extraversion：外向性，偏好社交和外部刺激的程度；
+
   A — Agreeableness：宜人性，合作、同理和关怀他人的程度；
+
   N — Neuroticism：神经质，情绪波动和压力敏感程度。
 
   预先分配 Big Five：
+
   {
+
     "agreeableness": "high",
+
     "conscientiousness": "medium",
+
     "extraversion": "medium",
+
     "neuroticism": "medium",
+
     "openness": "medium"
+
   }
 
   ## 5. 职业领域
+
   代码通过：
+
   diversity.assign_career_sector(self.user_id)
+
   预先确定职业所属领域。
 
   ## 6. 姓名多样性提示
+
   代码还生成：
+
   diversity.name_freshness_nudge(self.user_id)
+
   用于避免大量用户被生成相同的常见姓名。
 
 构造用户画像：
+
 输入：
+
  - cross_referenced_personas
+
   - negative_personas
+
   - 已筛选的 persona_item
+
   - 用户 ID
+
   - 预设人口分布
+
 输出：
+
 ```json
  {
     "name": "First Last",
@@ -665,13 +819,19 @@ Big Five 是五因素人格模型，用五个维度描述人格倾向：
 ### 10_infer_mbti
 
 输入：
+
   Big Five:
+
   Hidden persona summary:当前是(none)
+
   Validated hidden personas:当前是(none)
+
   Top hashtags:前50个
+
 输出mbti：每个维度需要输出两个字母的概率，并且概率和应为 1.0
 
 当前例子
+
 ```json
 "mbti": {
 "dimensions": {
@@ -700,17 +860,21 @@ Big Five 是五因素人格模型，用五个维度描述人格倾向：
 },
 ```
 
-
 ## writing voice
 
 一个用户在不同的平台使用的语言的风格可能不同，因此语言风格不是静态的
+
 基本原则：保持在一个共同的语调范围内，同时保证至少在两个应用内语调有所不同
+
 四层设计：前三层是共同语调，第四层随平台变化
+
 ![[Pasted image 20260831155333.png]]
 
 ### 11_generate_app_personas
  平台的基本角色和边界由 prompt 预先规定，用户的具体兴趣和表达内容由 LLM 根据前面步骤的数据选择，最终结果再由程序进行子集约束、多样性检查、非法元素清洗和必要的重试。
+
 平台的基本角色和边界如下：
+
 ```python
 6. **Audience types:**
 - **Facebook**: usually `mixed` leaning toward family/longtime friends
@@ -738,6 +902,7 @@ Caption-length bands intentionally err LONG so a real benchmark response has roo
 ```
 
 本例生成的不同平台画像：
+
 ```json
 "fields": {
 "ai_studio_persona": {},
@@ -845,11 +1010,12 @@ Caption-length bands intentionally err LONG so a real benchmark response has roo
 },
 ```
 
-
 12
+
 前一步生成的是用户画像，当前这一步生成的是ai studio中的那个ai应该以什么样的角色和该用户进行对话
 
 输入：
+
 用户画像、隐藏人格、 hashtag 兴趣、user_voice 和 app_personas
 
 ai studio的四层原则：
@@ -973,11 +1139,12 @@ Six independent axes — pick one value per axis from the closed vocabulary, or 
 （下面是输出格式）
 ```
 
-
 输出：
+
 ai角色的完整人物设定和说话风格
 
 在当前例子中：
+
 ```json
 "fields": {
 "ai_studio_persona": {
@@ -1167,15 +1334,16 @@ ai角色的完整人物设定和说话风格
 
 ```
 
-
 ### 13_build_sessions
 读取用户按时间排序的原始互动，比较相邻互动的时间差
+
           ↓
+
   间隔 ≤ 5 秒：放入同一 session
+
   间隔 > 5 秒：新建 session
 
 ### 14_route_preferences_to_apps
-
 
 ## 3.用户表面画像->隐藏人格
 
