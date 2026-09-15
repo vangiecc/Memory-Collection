@@ -1101,7 +1101,7 @@ Six independent axes — pick one value per axis from the closed vocabulary, or 
 5. **`function_word_profile` is ONE sentence describing the character's closed-class word habits.** Heavy on which qualifiers? Rare which intensifiers? Function words are the strongest stylometric signal — be specific.
 
 6. **`syntactic_preferences` uses fixed enumerations:**
-	
+
 	- `sentence_length_shape`: `"short_dominant"` | `"balanced"` | `"long_dominant"`
 	- `clause_embedding`: `"shallow"` | `"medium"` | `"deep"`
 	- `parataxis_hypotaxis`: `"parataxis"` | `"balanced"` | `"hypotaxis"`
@@ -1336,17 +1336,199 @@ ai角色的完整人物设定和说话风格
 
 ### 13_build_sessions
 读取用户按时间排序的原始互动，比较相邻互动的时间差
-
-          ↓
-
-  间隔 ≤ 5 秒：放入同一 session
-
-  间隔 > 5 秒：新建 session
+间隔 ≤ 5 秒：放入同一 session
+间隔 > 5 秒：新建 session
 
 ### 14_route_preferences_to_apps
+
+前面已经为用户生成了不同 App 的使用画像，例如：
+      - Instagram：项目进度、美妆制作、兴趣爱好、视觉内容
+      - Facebook：家庭、孩子、本地社区、亲友互动
+      - Threads：公开的兴趣讨论、徒步、手工项目
+      - Chatbot：私人任务、知识查询、写作和规划
+      - AI Studio：身份、情绪、人生目标、亲密或陪伴式深度对话
+接下来需要所有的偏好分配到不同的app上
+1.选择该用户的主要app
+2.根据语义进行app路由
+3.再对每个app的配额进行平衡
+	目标分布如下：
+		  约 40% Chatbot
+		  约 20% Instagram
+		  约 20% Facebook
+		  约 20% Threads
+
+```python
+## Your Task
+
+For EACH preference in the list above, pick exactly **one primary app** (from {five_apps}) where a real person with these sub-personas would most plausibly encounter and engage with that preference. The assignment should:
+
+1. **Maintain topical consistency within each app.** If the user's Facebook persona is about family & marketplace, preferences about parenting, Costco deals, and birthday parties should mostly land on Facebook. Don't scatter topically-coherent preferences across random apps.
+
+2. **Reflect the per-app persona's use_purposes and topical_focus.** Route a preference to the app whose declared purposes best cover it. E.g. if the Chatbot persona lists `"therapy and reflection"` and a preference is `"Values emotional vulnerability in close relationships"`, Chatbot is a natural home.
+
+3. **Allow NATURAL variation, not randomness.** Two closely related preferences should almost always land on the same app. If one belongs on Instagram, its partner almost certainly does too. Do not split tightly-coupled preferences for variety.
+
+4. **Prefer the app the user is more active on for that domain.** Use `audience_type` as a tie-breaker.
+
+5. **Be decisive.** Every preference gets exactly one app. No "both Facebook and Instagram" assignments — the downstream code expects a single app per item. (Noise / cross-posting is handled separately by the code.)
+
+{(
+
+"6. **Chatbot vs AI_Studio split.** Chatbot is for *utility tasks* (email drafting, knowledge queries, translation, technical Q&A, professional drafts, surface therapy reflection) — session-isolated, no cross-session memory. AI_Studio is for *companion chat* — relational deep chat tied to identity/aspiration/intimate-interest/parasocial/emotional-pattern themes — cross-session memory, chosen AI character voice. Route the same preference to Chatbot if it reads as utility (\"how do I draft X\", \"what's the difference between Y and Z\"), to AI_Studio if it reads as companion-chat material (identity exploration, life-meaning, parasocial fandom, intimate vulnerability). When in doubt, prefer AI_Studio for hidden-persona-anchored preferences and Chatbot for surface utility.\n\n"
+
+if ai_studio_persona else
+
+"6. **Chatbot naturally captures implicit signals.** In real chatbot usage, preferences emerge through questions, writing samples, and topics the user brings up — not through explicit engagement buttons. When routing `implicit_positive` preferences, give extra weight to Chatbot if the preference topic aligns with its `use_purposes` or `chatbot_contexts`. Implicit signals are the most natural fit for conversational AI interactions.\n\n"
+
+)}7. **Target distribution: {target_dist}.**
+
+{(
+
+"8. **Introspective, identity-anchored, parasocial, or intimate preferences default to AI_Studio.** Public social feeds are for publicly-visible engagement; the conversational surfaces are for private exploration.\n\n9. **`implicit_negative` preferences NEVER route to Chatbot or AI_Studio.** \"I don't like X\" / \"tired of Y\" reads as a public dismissal signal — route to a social platform."
+
+if ai_studio_persona else
+
+"8. **Introspective, knowledge-oriented, reflective, or private preferences default to Chatbot.** If a preference is about learning something, self-understanding, health/medical questions, therapy-style reflection, professional growth, or any topic the user would naturally explore in private, it belongs on Chatbot — NOT on a social feed. Social platforms are for publicly-visible engagement; Chatbot is for private conversation."
+
+)}
+
+```
+
+虽然该用户的话题都是parenting的，理论上会被归入facebook，但是根据配额限制，被分散到了五个平台
+
+### 15_assign_rows_to_apps
+上一步只是为每一个偏好组分配了app，这一步把具体的某一原子偏好映射到该app下
+
+### 16_assign_session_locations
+
+为每一个session分配当时所在的地理位置
+1. 按时间顺序整理所有 session。
+2. 找出 session 之间较长的空档，例如间隔超过 4 小时，作为可能发生出行的时间点。
+3. 把用户画像、活动时间范围、空档前后的 hashtag 等信息交给 LLM，让它判断：
+      - 用户的 home city 是哪里；
+      - 是否发生了旅行；
+      - 旅行去了哪个城市；
+      - 什么时候离开、什么时候返回。
+4. LLM 只返回少量“地点区段”，Python 再把这些区段插值到所有 session 上，因此最终每个 session 都有位置。
+5. 后续保存事件时，会通过 session 索引把位置写入每条 event 的 event_location 字段。
+
+  这个用户的结果是：
+  session 0 - 124     Allentown, PA
+  session 125 - 295   New York City, NY
+  session 296 - 396   Allentown, PA
+
+### 17_generate_calendar_modifications
+
+根据用户位置生成日历事件
+1. 按照session顺序扫描，不在home city就放进travel window
+	window内记录旅行地点、开始时间、结束时间
+2. 根据用户偏好时间的最晚和最早交互记录，计算观察窗口的大小
+	obs_start_ts = 所有交互中最早的时间
+	obs_end_ts = 所有交互中最晚的时间
+	obs_window_days = (obs_end_ts - obs_start_ts) / 86400
+	并根据窗口长度决定要生成多少条日历修改：
+	n_mods = min(
+      E6_MAX_CALENDAR_MODIFICATIONS,
+      max(E6_MIN_CALENDAR_MODIFICATIONS, int(obs_window_days * 3.0) + 4),)
+3. 日历事件分为3种：
+	added：创建具体日程，包含标题、开始结束时间、地点、类型、偏好关联等。
+	updated：引用已经创建的 entry_id，并以 diff 表示变化。
+	removed：引用已经存在的 entry_id，给出取消原因。
+
+### 18_generate_interaction_formats
+为用户分配到的app上的事件生成具体的交互记录
+
+### 19_generate_chatbot_conversations
+根据分配到chatbot的偏好事件，参考偏好事件生成用户和chatbot的交互记录
+1.并不是所有事件都会参与生成交互记录
+2.一个偏好事件的交互轮次也不止一轮
+
+### 20_generate_ai_studio_conversations
+
+
+### 21_audit_ai_studio_(quality_+_safety_floor)
+
+主要用于判断
+  这段对话是否像一个高质量的 AI Studio 对话？
+  是否保持了用户和 AI 角色的风格？
+  是否保持了跨 session 的记忆连续性？
+  是否包含不能进入数据集的危险内容？
+
+一共7个维度
+
+```json
+ {
+    "sampled": 2,
+    "passed": 2,
+    "graceful_degrade": 0,
+    "dropped_safety": 0,
+    "axes_failures": {
+      "ai_persona_voice_match": 0,
+      "cross_session_continuity": 0,
+      "no_fake_therapist_phrases": 0,
+      "no_mid_emotional_lecture": 0,
+      "obliqueness": 0,
+      "spt_pacing_smoothness": 0,
+      "user_voice_match": 0
+    }
+  }
+
+```
+
+
+### 22_generate_synthetic_content
+
+生成被用户看到的具体内容
+
+为不同的平台预定义了以下类型和分布：
+```json
+PLATFORM_CONTENT_PRIOR = {
+   "Instagram": {
+        "image": 0.45,
+        "short_video": 0.50,
+        "text": 0.05
+    },
+	"Facebook": {
+        "image": 0.35,
+        "short_video": 0.30,
+        "text": 0.35
+    },
+    "Threads": {
+        "image": 0.30,
+        "short_video": 0.20,
+        "text": 0.50
+    }
+}
+```
+
+
+
+### 23_inject_ad_events
+
+应当注入广告的平台有：Instagram、Facebook、Threads
+
+1.从hashtag中注入广告
+	基于规则的映射，比如：
+```tex
+  #food       -> food_and_beverage
+  #fashion    -> apparel
+  #skincare   -> apparel
+  #photography -> electronics
+  #travel     -> travel
+  #fitness    -> fitness_wellness
+  #homedecor  -> home_garden
+  #cars       -> auto
+  #gaming     -> entertainment
+  #coding     -> education
+```
+
+2.抽取事件，并以0.06的比例转换
+3.用户Id随机抽选
+
 
 ## 3.用户表面画像->隐藏人格
 
 > Preferences tell us what a user likes and dislikes; hidden personas tell us why.
 
 twelve hidden-persona types
+### 24_link_preferences_to_hidden_personas
