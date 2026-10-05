@@ -13,3 +13,11 @@
 - code：[bowen-upenn/PersonaMem-v3](https://github.com/bowen-upenn/PersonaMem-v3)
 - dataset：[PersonaMem-v3](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v3)
 - my-note：[conversation/personamem-v3.md](conversation/PersonaMem-v3.md)
+
+### 2026-10-04｜PersonaMem-v2
+
+- 状态：已结束
+- paper：[PersonaMem-v2](https://arxiv.org/abs/2512.06688)
+- code：[bowen-upenn/PersonaMem-v2](https://github.com/bowen-upenn/PersonaMem-v2)
+- dataset：[PersonaMem-v2](https://huggingface.co/datasets/bowen-upenn/PersonaMem-v2)
+- my-note：[conversation/PersonaMem-v2.md](conversation/PersonaMem-v2.md)
